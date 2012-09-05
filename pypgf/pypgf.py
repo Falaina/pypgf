@@ -282,6 +282,7 @@ class FontData(object):
    def __getitem__(self, item):
       return CharInfo(self.pgf_font, item, self._array)
 
+
 class PGFFont(object): 
    _fields_ = [
       ('header_off',   'uintle:16',  0x0),
@@ -298,15 +299,23 @@ class PGFFont(object):
       ('v_size',       'uintle: 32', 0x28),
       ('h_res',        'uintle: 32', 0x2C),
       ('v_res',        'uintle: 32', 0x30),
-      ('unk2_1',       'hex: 8',     0x34),
+      ('weight',       'hex: 8',     0x34),
       ('fontname',     'bytes:  64', 0x35),
       ('fonttype',     'bytes:  64', 0x75),
       ('unk3_1',       'hex: 8',     0xB5),
       ('first_glyph',  'uintle: 16', 0xB6),
       ('last_glyph',   'uintle: 16', 0xB8),
       ('unk4_34',      'bytes: 34',  0xBA),
-      ('adjusts',      'bytes: 16',  0xDC),
-      ('maximums',     'bytes: 20',  0xEC),
+      ('maxLeftXAdj',  'uintle: 32', 0xDC),
+      ('maxBaseYAdj',  'uintle: 32', 0xE0),
+      ('minCentXAdj',  'uintle: 32', 0xE4),
+      ('maxTopYAdj',   'uintle: 32', 0xE8),
+      ('maxAdvH',      'uintle: 32', 0xEC),
+      ('maxAdvV',      'uintle: 32', 0xF0),
+      ('maxSizeH',     'uintle: 32', 0xF4),
+      ('maxSizeV',     'uintle: 32', 0xF8),
+      ('maxGlyphW',    'uintle: 16', 0xFC),
+      ('maxGlyphH',    'uintle: 16', 0xFE),
       ('unk5',         'hex:   16',  0x100),
       ('len_dim_tab',  'uintle: 8',  0x102),
       ('len_xadj_tab', 'uintle: 8',  0x103),
@@ -378,24 +387,78 @@ class PGFFont(object):
 
    def __repr__(self):
       keys = ['first_glyph', 'last_glyph', 'h_res',
-              'v_res', 'h_size', 'v_size', 'header_off']
+              'v_res', 'h_size', 'v_size', 'header_off',
+              'maxGlyphH','maxGlyphW', 'maxSizeH', 'maxSizeV']
       out_dict = OrderedDict()
       for key in keys:
          out_dict[key] = self.__dict__[key]
       return str(out_dict)
 
-   def get_string_metrics(self, s):
+   def get_str_metrics(self, s):
+      width64  = 0
+      height = 0
+      for c in s:
+         data = self.fontdata[ord(c)]
+         width64 += data.glyph_info.horiz_adv  + (data.left * 64)
+         if height < data.top + data.height:
+            height = data.top + data.height
+      print("str metrics", (s, width64, height))
+      return (s, width64, height)
+
+   def _split_chunk(self, chunk, w, h):
+      (s, chunk_w, _) = chunk
+      chunks = (chunk,)
+      print('chunk', chunk)
+      if chunk_w > w:
+         split_idx = s.rfind(' ')
+         if split_idx < -1:
+            raise ValueError('Unable to split string')
+         chunks = (self.get_str_metrics(s[:split_idx]), 
+                   self.get_str_metrics(s[split_idx:]))
+         if chunks[0][1] > w:
+            chunks = self._split_chunk(chunks[0], w, h) + chunks[1:]
+      return chunks
+         
+      
+   def combine_chunks(self, chunks, w, h):
+      cur_width = 0
+      cur_txt = ''
+      cur_height = 0
+      for i, (txt, chunk_w, chunk_h) in enumerate(chunks):
+         if cur_width + chunk_w < w:
+            cur_width += chunk_w
+            cur_txt += txt
+            print('cur width is', cur_width, cur_txt)
+            if chunk_h > cur_height:
+               cur_height = chunk_h
+         else:
+            break
+      return  (i, (cur_txt, cur_width, cur_height))
+
+   def wrap_text(self, s, w, h):
+      lines = []
+      chunks =  (self.get_str_metrics(s),)
+      while len(chunks) > 0:
+         (combine_idx, chunk) = self.combine_chunks(chunks, w, h)
+         print('chunks', chunks, chunk)
+         if combine_idx > 0 and chunk[0] != '' and chunk[1] != 0:
+            lines.append(chunk)
+            chunks = chunks[combine_idx+1:]
+         else:
+            split_chunks = self._split_chunk(chunks[0], w, h)
+            lines.append(split_chunks[0])
+            chunks = split_chunks[1:] + chunks[1:]
+      return lines
+
+   def draw_text(self, s):
       chars = []
       # Layout the rows at 512 * 64 resolution
       w = 512 * 64
-      h = 150
+      h = 50
       max_top = 0
       for c in s:
          data = self.fontdata[ord(c)]
          chars.append(data)
-         if h < data.top + data.height:
-            h = data.top + data.height
-
          if max_top < data.height:
             max_top = data.height
 
@@ -406,63 +469,27 @@ class PGFFont(object):
          for j in range(w):
             row.append(0)
 
-      cur_x = 64
+      cur_x = 0
       cur_y = max_top
-
+      img = np.zeros((h, w), np.uint8)
 
       for c in chars:
-         print('CurX: %d' % (cur_x/64,))
-
-         print(c.char, c.width, c.height, c.top, c.left, c.glyph_info.horiz_adv)
-         print(c.height, c.top, c.height + c.top)
-         
          for i in range(c.height):
             for j  in range(c.width):
                for k in range(64):
-                  screen[(cur_y + i - c.top)][(cur_x) + (j * 64) + k + (c.left * 64)] = c.samples[i][j]
+                  img[(cur_y + i - c.top)][(cur_x) + (j * 64) + k + (c.left * 64)] = c.samples[i][j]
          cur_x += c.glyph_info.horiz_adv  + (c.left * 64)
+      i =Image.fromstring('L', (w, h), img.tostring())
 
-      new_img = np.zeros((h, w/64), dtype=np.int8)
-      for i in range(h):
-         new_img[i] = img[i][0:w:64]
-
-      screenstr = ''
-      all_rows = []
-      for row in screen:
-         chunks = len(row)/64
-         new_row = []
-         cur_row = []
-         for i in range(chunks):
-            if i > 0:
-               old_chunk = chunk
-            else:
-               old_chunk = None
-            chunk = row[i*64:(i*64)+64]
-            if old_chunk is None:
-               old_chunk = chunk
-            out_chunk = chunk
-#               out_chunk.append(old_chunk[i]/4 + (3*chunk[i])/4)
-            new_row.append((sum(out_chunk))/64)
-            cur_row.append((sum(out_chunk))/64)
-         for sample in new_row:
-            screenstr += chr(sample)
-         cur_row = cur_row[0:80]
-         all_rows.append(cur_row)
-
-      pprint(all_rows, width=555)
-      i =Image.fromstring('L', (w/64, h), screenstr)
-      i.save(joinpath(TMP_DIR, 'test.png'))
-      print(new_img)
-
-      i = Image.fromstring('L',(w/64, h), new_img.tostring())
-      i.save(joinpath(TMP_DIR, 'test2.png'))
-
+      i = i.resize((w/8, h*8), Image.ANTIALIAS)
+      i.save(joinpath(TMP_DIR, 'test3.png'))
       
 
          
          
 p = PGFFont(joinpath(FONT_DIR, 'ltn0.pgf'))
-p.get_string_metrics('Regular')
+print('chunks', p.wrap_text('Testing if this line is too long can it do a dfecent job', 16000, 100))
+#p.draw_text('Regular')
 
 
 
