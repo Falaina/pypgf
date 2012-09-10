@@ -14,7 +14,6 @@ from bitstring import ConstBitStream
 from binascii import unhexlify
 from os.path import basename, dirname, join as joinpath, normpath
 from pprint import pprint
-from PIL import Image
 from abc import ABCMeta, abstractmethod
 import sys
 import numpy as np
