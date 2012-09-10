@@ -1,4 +1,12 @@
-#s-*- coding: utf-8 -*-
+#-*- coding: utf-8 -*-
+# pypgf - Python tools for working with pgf fonts.
+# Written in 2012 By Falaina falaina@falaina.net
+# To the extent possible under law, the author(s) have dedicated all
+# copyright and related and neighboring rights to this software to the
+# public domain worldwide. This software is distributed without any
+# warranty.  You should have received a copy of the CC0 Public Domain
+# Dedication along with this software. If not, see
+# <http://creativecommons.org/publicdomain/zero/1.0/>.
 from __future__ import print_function
 from array import array
 from collections import OrderedDict
@@ -8,19 +16,25 @@ from os.path import basename, dirname, join as joinpath, normpath
 from pprint import pprint
 from PIL import Image
 from abc import ABCMeta, abstractmethod
-
+import sys
+import numpy as np
 import logging
+
+# Directories
+FONT_DIR = normpath(joinpath(dirname(__file__), '..', 'fonts'))
+TMP_DIR  = normpath(joinpath(dirname(__file__), '..', 'tmp'))
+
+# Logging stuff
 FORMAT = '%(asctime)-15s %(module)-6s %(levelname)-6s %(message)s'
 logging.basicConfig(format=FORMAT)
 log = logging.getLogger('pypgf')
 log.setLevel(logging.DEBUG)
 
-FONT_DIR = normpath(joinpath(dirname(__file__), '..', 'fonts'))
-TMP_DIR  = normpath(joinpath(dirname(__file__), '..', 'tmp'))
 
 class BinaryField(object):
    def __init__(self, name, fmt_string, offset=None):
-      """ Creates a BinaryField.
+      """ 
+      Creates a BinaryField.
       Offset is not strictly necessary, but will allow validation during parsing
       """
       self.name = name
@@ -34,6 +48,10 @@ class BinaryField(object):
 
 class BitField(object):
    def __init__(self, name, array, start_pos, num_bits):
+      """
+      Creates a BitField
+      This can be indexed by individual bits
+      """
       self.name      = name
       self.start_pos = start_pos
       self.num_bits  = num_bits
@@ -56,9 +74,6 @@ class BitField(object):
    def __repr__(self):
       return 'BitField(name=%s, value=%d, offset=%d, num_bits: %d)' % \
           (self.name, self.val, self.start_pos, self.num_bits)
-
-import numpy as np
-      
 
 class PGFFile(object): 
    def __init__(self, buf, fontname='font.pgf'):
@@ -85,29 +100,27 @@ class Table(object):
          raise IndexError('index must be less than list size')
 
       bit_ptr = item * self.bpe
-      print('Starting look up of idx %d from bit ptr %d' % (item, bit_ptr))
+      log.debug('Starting look up of idx %d from bit ptr %d' % (item, bit_ptr))
       val = 0
       for i in range(self.bpe):
          bit_shift = (bit_ptr % 8)
          val +=  ((self._array[bit_ptr/8] >> bit_shift) & 0x1) << i
          bit_ptr += 1
 
-      print('Value is %d' % (val,))
+      log.debug('Value is %d' % (val,))
       return val
 
    def __repr__(self):
       return 'Table(name=%s, entries=%s, bpe=%s) # size=%s' % \
           (self.name, self.entries, self.bpe, self.size)
-
-
    
 
 PGF_BMP_V_ROWS = 0x01
 PGF_BMP_H_ROWS = 0x02
 PGF_BMP_OVERLAY = 0x03
-PGF_NO_EXTRA1 = 0x04
-PGF_NO_EXTRA2 = 0x08
-PGF_NO_EXTRA3 = 0x10
+PGF_EXTRA_METRICS1 = 0x04
+PGF_EXTRA_METRICS2 = 0x08
+PGF_EXTRA_METRICS3 = 0x10
 PGF_CHARGLYPH = 0x20
 PGF_SHADGLPH  = 0x40
 PGF_WIDTH_MASK = 0xFF
@@ -124,9 +137,9 @@ class GlyphInfo(object):
       ('shadow_id', 9)      
       ]
    _extensions_ = [
-      ('PGF_NO_EXTRA1', 0x04, 56),
-      ('PGF_NO_EXTRA2', 0x08, 56),
-      ('PGF_NO_EXTRA3', 0x10, 56)
+      ('PGF_EXTRA_METRICS1', 0x04, 56),
+      ('PGF_EXTRA_METRICS2', 0x08, 56),
+      ('PGF_EXTRA_METRICS3', 0x10, 56)
       ]
 
    def __init__(self, pgf_font, start_pos, array):
@@ -141,29 +154,23 @@ class GlyphInfo(object):
          self.__dict__[name] = bf.val
 
       flags = self.flags
-      print('Flags: ', hex(flags))
-
-      print('myster: %s' % (hex(BitField(name, array, bit_ptr, 24).val,)))
       bit_ptr += 24
       for (name, bit, size) in self._extensions_:
          if (flags & bit):
-            print('%s set' % (name,))
+            log.debug('%s set' % (name,))
          else:
-            print('%s not set, adding %d' % (name, size))
-            print('Mystery: %s' %(hex(BitField(name, array, bit_ptr, 56).val),))
+            log.debug('%s not set, adding %d' % (name, size))
+            log.debug('Mystery: %s' %(hex(BitField(name, array, bit_ptr, 56).val),))
             bit_ptr += size
 
       adv = BitField('AdvPtr', array, bit_ptr, 8)
       bit_ptr += 8
       
       self.advptr = (adv.val * 2)
-      print('Using a advptr of %x' % (self.advptr,))
-      print('adv', pgf_font.tables['adv_tab'][(adv.val) * 2]/16)
-
+      log.debug('adv' + str( pgf_font.tables['adv_tab'][(adv.val) * 2]/16))
       self.horiz_adv = pgf_font.tables['adv_tab'][(adv.val) * 2]
 
-      print('Parsed glyph', self)
-
+      log.info('Parsed glyph' + str( self))
       self.ptr = bit_ptr / 8
 
    @property
@@ -188,11 +195,10 @@ class CharInfo(object):
       self.char     = char
       self._array   = array
 
-
       idx = pgf_font.tables['charmap'][char - pgf_font.first_glyph]
       charptr = pgf_font.tables['charptr'][idx] * 4 * 8
 
-      print('Using a charptr of %x' % (charptr,))
+      log.debug('Using a charptr of %x' % (charptr,))
       bit_ptr = charptr
       self.bitfields = {}
 
@@ -204,7 +210,6 @@ class CharInfo(object):
 
       self.glyph_info = GlyphInfo(pgf_font, bit_ptr, array)
       horiz_rows = (self.glyph_info.flags & PGF_BMP_V_ROWS) != 0
-      print('horiz rows', horiz_rows)
       samples = []
       for i in range(self.height):
          row_samples = []
@@ -212,7 +217,9 @@ class CharInfo(object):
          for j in range(self.width):
             row_samples.append(0)
 
-      print(self)
+      # Decode the glyph bitmap. It's RLE-encoded.
+      # If the first nibble < 8, repeat the next nibble n + 1 times
+      # if the first nibble >= 8, pass it to the output bitstream
       if self.width and self.height: 
          i = 0
          bit_ptr = self.glyph_info.ptr * 8
@@ -242,19 +249,16 @@ class CharInfo(object):
                   break
 
                samples[yy][xx] = (value << 4) | value
-         pprint([['%02x' %(a,) for a in y] for y in samples])
          rawn = '\n'.join([''.join([str(x) for x in row]) for row  in samples])
          raw  = ''
          for row in samples:
             for sample in row:
                raw += chr(sample)
-         i =Image.fromstring('L', (self.width, self.height), raw)
-         i.save(joinpath(TMP_DIR, unichr(self.char) + '.bmp'))
                   
          self.samples = samples
 
       else:
-         print('Strange no bmp info for %s', self)
+         log.warn('Strange no bmp info for %s' % (self,))
 
    def __repr__(self):
       char = self.char
@@ -347,6 +351,10 @@ class PGFFont(object):
           (self.bits.bytepos, self.header_size)
 
    def __new__(cls, font_filename):
+      """
+      Create a new PGFFont from tile font file specified by 
+      `font_filename`
+      """
       log.info('Opening font file %s' % (font_filename,))
       bits = ConstBitStream(filename=font_filename)
       obj = super(PGFFont, cls).__new__(cls)
@@ -385,16 +393,10 @@ class PGFFont(object):
       char = obj.tables['charmap'][ord(u'o')]
       return obj
 
-   def __repr__(self):
-      keys = ['first_glyph', 'last_glyph', 'h_res',
-              'v_res', 'h_size', 'v_size', 'header_off',
-              'maxGlyphH','maxGlyphW', 'maxSizeH', 'maxSizeV']
-      out_dict = OrderedDict()
-      for key in keys:
-         out_dict[key] = self.__dict__[key]
-      return str(out_dict)
-
    def get_str_metrics(self, s):
+      """
+      Get metrics for string `s`
+      """
       width64  = 0
       height = 0
       for c in s:
@@ -402,59 +404,47 @@ class PGFFont(object):
          width64 += data.glyph_info.horiz_adv  + (data.left * 64)
          if height < data.top + data.height:
             height = data.top + data.height
-      print("str metrics", (s, width64, height))
+      log.debug("str metrics %s" % ((s, width64, height),))
       return (s, width64, height)
-
-   def _split_chunk(self, chunk, w, h):
-      (s, chunk_w, _) = chunk
-      chunks = (chunk,)
-      print('chunk', chunk)
-      if chunk_w > w:
-         split_idx = s.rfind(' ')
-         if split_idx < -1:
-            raise ValueError('Unable to split string')
-         chunks = (self.get_str_metrics(s[:split_idx]), 
-                   self.get_str_metrics(s[split_idx:]))
-         if chunks[0][1] > w:
-            chunks = self._split_chunk(chunks[0], w, h) + chunks[1:]
-      return chunks
-         
       
-   def combine_chunks(self, chunks, w, h):
-      cur_width = 0
-      cur_txt = ''
-      cur_height = 0
-      for i, (txt, chunk_w, chunk_h) in enumerate(chunks):
-         if cur_width + chunk_w < w:
-            cur_width += chunk_w
-            cur_txt += txt
-            print('cur width is', cur_width, cur_txt)
-            if chunk_h > cur_height:
-               cur_height = chunk_h
-         else:
-            break
-      return  (i, (cur_txt, cur_width, cur_height))
-
    def wrap_text(self, s, w, h):
-      lines = []
-      chunks =  (self.get_str_metrics(s),)
-      while len(chunks) > 0:
-         (combine_idx, chunk) = self.combine_chunks(chunks, w, h)
-         print('chunks', chunks, chunk)
-         if combine_idx > 0 and chunk[0] != '' and chunk[1] != 0:
-            lines.append(chunk)
-            chunks = chunks[combine_idx+1:]
-         else:
-            split_chunks = self._split_chunk(chunks[0], w, h)
-            lines.append(split_chunks[0])
-            chunks = split_chunks[1:] + chunks[1:]
-      return lines
+      """
+      word wrap string `s` to fit in a rectangle `w` pixels wide by `h` pixels high.
+      (It currently ignores the height parameter)
+      """
+      chunks = []
+      words = [self.get_str_metrics(x + ' ') for x in s.split(' ')]
+      intervals = []
+      cur_start = 0
+      while cur_start < len(words):
+         cur_width = 0
+         cur_end = cur_start
+         while cur_end < len(words):
+            cur_word = words[cur_end]
+            if cur_width + cur_word[1] <= w:
+               cur_width += cur_word[1]
+            else:
+               break
+            cur_end += 1
+         intervals.append((cur_start, cur_end))
+         if cur_start == cur_end:
+            assert ValueError('Unable to layout line')
+         cur_start = cur_end
+      for (start, end) in intervals:
+         i = start
+         txt = ''
+         while i < end:
+            txt += words[i][0]
+            i += 1
+         chunks.append(txt)
+      return chunks
 
-   def draw_text(self, s):
+   def draw_text(self, s, x, y, img, w, h):
+      """
+      Draw string `s` to the rectangle specified by `x`, `y`, `w`, `h`.
+      `img` must be a sequence with dimensions `w*64`x`h`
+      """
       chars = []
-      # Layout the rows at 512 * 64 resolution
-      w = 512 * 64
-      h = 50
       max_top = 0
       for c in s:
          data = self.fontdata[ord(c)]
@@ -469,9 +459,8 @@ class PGFFont(object):
          for j in range(w):
             row.append(0)
 
-      cur_x = 0
-      cur_y = max_top
-      img = np.zeros((h, w), np.uint8)
+      cur_x = x
+      cur_y = y + max_top
 
       for c in chars:
          for i in range(c.height):
@@ -479,18 +468,33 @@ class PGFFont(object):
                for k in range(64):
                   img[(cur_y + i - c.top)][(cur_x) + (j * 64) + k + (c.left * 64)] = c.samples[i][j]
          cur_x += c.glyph_info.horiz_adv  + (c.left * 64)
-      i =Image.fromstring('L', (w, h), img.tostring())
 
-      i = i.resize((w/8, h*8), Image.ANTIALIAS)
-      i.save(joinpath(TMP_DIR, 'test3.png'))
-      
-
-         
-         
-p = PGFFont(joinpath(FONT_DIR, 'ltn0.pgf'))
-print('chunks', p.wrap_text('Testing if this line is too long can it do a dfecent job', 16000, 100))
-#p.draw_text('Regular')
+   def __repr__(self):
+      keys = ['first_glyph', 'last_glyph', 'h_res',
+              'v_res', 'h_size', 'v_size', 'header_off',
+              'maxGlyphH','maxGlyphW', 'maxSizeH', 'maxSizeV']
+      out_dict = OrderedDict()
+      for key in keys:
+         out_dict[key] = self.__dict__[key]
+      return str(out_dict)
 
 
+if '__main__' == __name__:
+   # FIXME: This is just a guess at the resolution of the text box
+   # Fonts are laid out at 1/64 pixel resolution, so multiply
+   # the width by 64
+   (w, h) = (475*64, 100)
+   if len(sys.argv) <= 1:
+      print('Usage: pypgf.py pgf-file "text-to-wrap"')
+      exit(-1)
 
+   (filename, text) = sys.argv[1:]
+   img = np.zeros((h, w), np.uint8)
 
+   p = PGFFont(filename)
+   chunks = p.wrap_text(text, w, h)
+   print('chunks', chunks)
+   cur_y = 0
+   # for chunk in chunks:
+   #    p.draw_text(chunk, 0, cur_y, img, w, h)
+   #    cur_y += p.maxSizeV/64
