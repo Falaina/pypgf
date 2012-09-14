@@ -27,7 +27,7 @@ TMP_DIR  = normpath(joinpath(dirname(__file__), '..', 'tmp'))
 FORMAT = '%(asctime)-15s %(module)-6s %(levelname)-6s %(message)s'
 logging.basicConfig(format=FORMAT)
 log = logging.getLogger('pypgf')
-log.setLevel(logging.DEBUG)
+log.setLevel(logging.WARN)
 
 
 class BinaryField(object):
@@ -484,16 +484,15 @@ if '__main__' == __name__:
    # the width by 64
    (w, h) = (475*64, 100)
    if len(sys.argv) <= 1:
-      print('Usage: pypgf.py pgf-file "text-to-wrap"')
+      print('Usage: pypgf.py pgf-file filename')
       exit(-1)
-
-   (filename, text) = sys.argv[1:]
-   img = np.zeros((h, w), np.uint8)
-
-   p = PGFFont(filename)
-   chunks = p.wrap_text(text, w, h)
-   print('chunks', chunks)
-   cur_y = 0
-   # for chunk in chunks:
-   #    p.draw_text(chunk, 0, cur_y, img, w, h)
-   #    cur_y += p.maxSizeV/64
+   p = PGFFont(sys.argv[1])
+   csv = open(sys.argv[2] + '.csv', 'w+')
+   text = open(sys.argv[2]).readlines()
+   for line_no, line in enumerate(text):
+      processed = line.strip('\n').strip('\r')
+      processed = processed.replace('\xe2\x80\x99', '\'').replace('\n\n', '\n')
+      chunks = p.wrap_text(processed, w, h)
+      for (i, subline) in enumerate(chunks):
+         csv.write('%-3s | %s | %-8s | %s\r\n' % (line_no, i, '', subline.encode('utf-8')))
+   csv.close()
