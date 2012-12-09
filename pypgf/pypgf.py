@@ -491,7 +491,8 @@ if '__main__' == __name__:
    text = open(sys.argv[2]).readlines()
    for line_no, line in enumerate(text):
       processed = line.strip('\n').strip('\r')
-      processed = processed.replace('\xe2\x80\x99', '\'').replace('\n\n', '\n')
+      processed = processed.replace('\n\n', '\n')
+      processed = processed.decode('utf-8')
       chunks = p.wrap_text(processed, w, h)
       for (i, subline) in enumerate(chunks):
          csv.write('%-3s | %s | %-8s | %s\r\n' % (line_no, i, '', subline.encode('utf-8')))
